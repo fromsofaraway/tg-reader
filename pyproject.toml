@@ -1,0 +1,22 @@
+[project]
+name = "tg-collector"
+version = "0.1.0"
+description = "Read-only Telegram chat collector: exports support-chat history from a user account, anonymizes it and builds an LLM-ready dataset"
+readme = "README.md"
+requires-python = ">=3.14"
+dependencies = [
+    "qrcode>=8.2",
+    "telethon>=1.44.0",
+]
+
+[project.scripts]
+tg-collector = "tg_collector:main"
+
+[build-system]
+requires = ["uv_build>=0.12.6,<0.13.0"]
+build-backend = "uv_build"
+
+[dependency-groups]
+dev = [
+    "pytest>=9.1.1",
+]

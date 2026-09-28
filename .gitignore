@@ -1,0 +1,19 @@
+# Secrets and sensitive data: never commit
+.env
+config.toml
+*.session
+*.session-journal
+data/
+
+# Python
+__pycache__/
+*.py[oc]
+build/
+dist/
+wheels/
+*.egg-info
+.venv
+.pytest_cache/
+
+# OS / editors
+.DS_Store

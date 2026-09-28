@@ -1,0 +1,90 @@
+# Copy to config.toml and adjust. This file holds no secrets (those live in .env).
+
+[chats]
+# Which dialogs are client chats. Client chats are groups/supergroups; private
+# dialogs, broadcast channels and bots are skipped by default.
+include_types = ["group", "supergroup"]     # add "private" to include 1:1 dialogs
+include_ids = []          # if non-empty, ONLY these chat ids (see `tg-collector chats`)
+exclude_ids = []          # chat ids to skip
+exclude_title_regex = []  # e.g. ["^\\[INT\\]", "internal"]
+include_archived = true
+exclude_internal = true   # skip chats whose members are all staff/bots
+
+[staff]
+# Colleagues by numeric user id (preferred: usernames can be changed or re-registered
+# by strangers) or by @username. The logged-in account is always "support".
+# `tg-collector chats` and `anonymize` report entries that matched nobody.
+support = []                        # other support accounts, if any
+sales = []                          # e.g. [123456789, "@ivan_sales"]
+other = []                          # colleagues who sit in client chats mostly read-only
+                                    # (managers, engineers); role "other", side STAFF
+
+[anonymize]
+name_mode = "first"        # first | full | none  - what display name virtual users keep
+                           # (a name that is only a surname, or that spells a participant
+                           # or a bot's namesake, is dropped whatever the mode)
+keep_chat_titles = false   # titles usually name the client organisation -> replaced by C#####
+keep_service_messages = false  # join/leave/pin/title-change events
+keep_bot_messages = true   # set false if bots only add monitoring noise
+keep_file_names = false    # attachment names (scrubbed like text) next to [document:pdf];
+                           # the extension itself is shown only when it really is one
+url_mode = "drop"          # drop | domain | keep   (keep can expose client hosts; domain
+                           # hides a host that spells a client or a person)
+allow_domains = []         # exact hosts kept verbatim (links and bare text), e.g. ["docs.example.com", "example.org"];
+                           # "*.example.com" keeps the host but hides the subdomain (<sub>.example.com);
+                           # secrets, redirect targets and client names inside a kept link are still removed;
+                           # list your own hosts here: keep_terms do not keep a host that merely contains them
+keep_terms = []            # product/company names that must never be scrubbed, e.g. ["Northwind"];
+                           # put your product name here: every chat-title word is scrubbed as <org> otherwise
+                           # (generic words such as Банк, Групп, Pay, Card and feature words such as
+                           # вебхуки, касса, СБП, прод, checkout are never taken from titles);
+                           # a full name or custom term that contains a keep term is still removed whole,
+                           # a multi-word keep term is kept only as the whole phrase, and a username
+                           # that contains one (@northwind_ivan) is still replaced by its virtual id;
+                           # matched case-insensitively, with e/yo folding and with invisible characters
+                           # and stray blanks ignored, so a term pasted out of a chat still matches
+custom_terms = []          # extra organisation names to replace with <org> (2+ characters, e.g. ["ЯР"]);
+                           # whole word, case-insensitive, also transliterated, but not inflected: a
+                           # two-character term also removes the ordinary word it spells ("яр"), while
+                           # its case forms ("Яру") need their own entries
+custom_patterns = []       # extra regexes to replace with <redacted>: case-insensitive, multiline, and the
+                           # whole match goes, so match the value only to keep the keyword as product
+                           # knowledge, e.g. ['(?<=КПП\s)\d{9}', '(?<=KPP\s)\d{9}'] (TOML '...' strings need
+                           # no escaping). A pattern that can match the empty string is rejected: write
+                           # \d{9} or \d+, never \d*. A pattern beats keep_terms inside its own match.
+card_bins = []             # BINs (first 6 digits) of your product's cards, e.g. ["424242", "400000"];
+                           # card numbers become 424242********** and are recognised by BIN even with typos
+scrub_domains = true       # bare domains in text ("acme.ru", "Ромашка.РФ") become <domain>; allow_domains are kept;
+                           # the private report lists the most frequent ones (public hosts -> allow_domains)
+scrub_last_names = true    # remove last names of known participants from message text
+                           # (a role word such as Support or Поддержка in the last-name field is not one;
+                           # also a forward author's surname when it is spelled like one)
+scrub_chat_titles = true   # remove chat-title words (client org names) from message text
+# A title word present in >= this share of chats (and >= 3 chats) is probably the
+# product name: the run suggests it for keep_terms. It stays scrubbed until you add
+# it there (it can also be a client with several chats).
+generic_title_share = 0.2
+
+[output]
+timezone = "UTC"             # IANA zone for transcript timestamps, e.g. "Europe/Berlin"; JSONL always keeps UTC
+episode_gap_hours = 6        # inactivity gap that starts a new episode
+max_chars = 200000           # transcript part / chunk size in characters; 0 = no splitting, no chunks
+max_message_chars = 2000     # longer messages are shortened in transcripts (JSONL keeps them whole)
+turn_merge_seconds = 120     # consecutive messages of one sender within this window render as one turn
+
+[export]
+# Pacing. Slow on purpose: the account must never look like an abusive client.
+wait_time = 1.0              # seconds between history pages (100 messages each); Telethon spaces the
+                             # page requests exactly this far apart, with no random addition.
+                             # Raise to 3.0 for Telethon's estimate of ~10 history requests per 30 s
+chat_wait = 3.0              # seconds before starting the next chat
+participants_wait = 2.0      # seconds between member-list / chat-info requests
+flood_sleep_threshold = 3600 # sleep through FloodWait automatically up to this many seconds
+max_flood_wait = 7200        # a longer FloodWait stops the run; re-run later to resume
+max_retries = 5              # transient network/server errors per chat before giving up
+flush_every = 500            # messages per write to disk
+# Read history through Telegram's official data-export (takeout) session. Recommended
+# for the first full export: it is the path Telegram designed for bulk export and has
+# relaxed limits, but Telegram notifies all devices and may ask you to confirm the export
+# in the official app (or wait up to 24 h) before the first run.
+takeout = false
