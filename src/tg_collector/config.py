@@ -112,6 +112,7 @@ class ExportTuning:
     max_retries: int = 5              # transient network/server errors per chat before giving up
     flush_every: int = 500
     takeout: bool = False             # read history through Telegram's official data-export session
+    members_cache_hours: float = 24.0 # reuse member lists saved by `chats`/`export` this long; 0 = never
 
 
 @dataclass(frozen=True)
@@ -432,7 +433,10 @@ def _export(s: _Section) -> ExportTuning:
         max_retries=s.number("max_retries", 5, integer=True),
         flush_every=max(1, s.number("flush_every", 500, integer=True)),
         takeout=s.flag("takeout", False),
+        members_cache_hours=s.number("members_cache_hours", 24.0),
     )
     if min(tuning.wait_time, tuning.chat_wait, tuning.participants_wait) < 0:
         raise ConfigError("[export] wait times must be non-negative")
+    if tuning.members_cache_hours < 0:
+        raise ConfigError("[export] members_cache_hours must be non-negative (0 turns the cache off)")
     return tuning

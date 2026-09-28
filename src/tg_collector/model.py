@@ -12,7 +12,7 @@ which are unique across users, chats and channels.
 from __future__ import annotations
 
 import dataclasses
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any, Iterable, Optional
 
@@ -142,6 +142,32 @@ class RawChat:
             is_accessible=bool(d.get("is_accessible", True)),
             participant_count=d.get("participant_count"),
             participant_ids=tuple(int(x) for x in d.get("participant_ids") or ()),
+        )
+
+
+@dataclass(frozen=True)
+class ChatDetails:
+    """What one full-info round trip tells about a chat's membership."""
+
+    users: list[RawUser] = field(default_factory=list)
+    complete: bool = False                 # the list covers every member
+    error: str = ""                        # error class when the list is unavailable
+    participants_count: Optional[int] = None
+    migrated_from_id: Optional[int] = None  # marked id of the legacy group, if any
+
+    def to_json(self) -> dict[str, Any]:
+        d = dataclasses.asdict(self)
+        d["users"] = [u.to_json() for u in self.users]
+        return d
+
+    @classmethod
+    def from_json(cls, d: dict[str, Any]) -> "ChatDetails":
+        return cls(
+            users=[RawUser.from_json(u) for u in d.get("users") or ()],
+            complete=bool(d.get("complete", False)),
+            error=d.get("error") or "",
+            participants_count=d.get("participants_count"),
+            migrated_from_id=d.get("migrated_from_id"),
         )
 
 

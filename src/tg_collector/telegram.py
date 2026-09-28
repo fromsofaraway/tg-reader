@@ -32,7 +32,6 @@ import mimetypes
 import platform
 import random
 import sys
-from dataclasses import dataclass, field
 from typing import AsyncIterator, Optional
 
 from telethon import TelegramClient, errors, functions, types, utils
@@ -44,7 +43,7 @@ from .model import (
     FWD_CHANNEL, FWD_CHAT, FWD_HIDDEN, FWD_IMPORTED, FWD_USER,
     KIND_BOT, KIND_CHANNEL, KIND_GROUP, KIND_PRIVATE, KIND_SELF, KIND_SUPERGROUP,
     SENDER_CHANNEL, SENDER_CHAT, SENDER_NONE, SENDER_USER,
-    Entity, Forward, Media, RawChat, RawMessage, RawUser,
+    ChatDetails, Entity, Forward, Media, RawChat, RawMessage, RawUser,
 )
 
 log = logging.getLogger(__name__)
@@ -71,17 +70,6 @@ def _halt_for(exc: BaseException) -> Optional[Exception]:
             f"The session was invalidated ({type(exc).__name__}). This usually means the same session file was "
             "used from two places at once. Run: tg-collector login (from one machine only).")
     return None
-
-
-@dataclass(frozen=True)
-class ChatDetails:
-    """What one full-info round trip tells about a chat's membership."""
-
-    users: list[RawUser] = field(default_factory=list)
-    complete: bool = False                 # the list covers every member
-    error: str = ""                        # error class when the list is unavailable
-    participants_count: Optional[int] = None
-    migrated_from_id: Optional[int] = None  # marked id of the legacy group, if any
 
 
 class TelegramSource:

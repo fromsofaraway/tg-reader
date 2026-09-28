@@ -1,8 +1,8 @@
 """Command-line interface: the composition root.
 
     tg-collector login                 authorize the support account (creates the session)
-    tg-collector chats                 list dialogs and show which ones will be exported
-    tg-collector export [--full] [--only ID ...]
+    tg-collector chats [--refresh]     list dialogs and show which ones will be exported
+    tg-collector export [--full] [--only ID ...] [--refresh]
     tg-collector anonymize
     tg-collector verify
     tg-collector run                   export + anonymize + verify
@@ -19,6 +19,7 @@ import asyncio
 import logging
 import os
 import sys
+from datetime import timedelta
 from pathlib import Path
 from typing import Optional
 
@@ -26,7 +27,7 @@ from .anonymize import AnonymizationError, Mapping, MappingError, anonymize
 from .config import ConfigError, Settings
 from .dataset import write_dataset
 from .errors import ExportHalt
-from .export import ChatDecision, export, plan
+from .export import ChatDecision, InspectionCache, export, plan
 from .model import Roles
 from .rawstore import RawStore, restrict_private_paths, write_private_json
 from .verify import verify
@@ -38,6 +39,17 @@ def _say(msg: str) -> None:
 
 def _roles(settings: Settings, me_id: Optional[int]) -> Roles:
     return Roles.build(me_id, support=settings.staff.support, sales=settings.staff.sales, other=settings.staff.other)
+
+
+async def _plan(src, settings: Settings, args) -> list[ChatDecision]:
+    """The chat plan, reusing member lists an earlier `chats` or `export` saved."""
+    me = await src.me()
+    hours = settings.export.members_cache_hours
+    cache = None
+    if hours > 0:
+        cache = InspectionCache(RawStore(settings.raw_dir), me.id, timedelta(hours=hours),
+                                refresh=bool(getattr(args, "refresh", False)))
+    return await plan(src, settings.chats, _roles(settings, me.id), cache=cache, log=_say)
 
 
 def _print_plan(decisions: list[ChatDecision]) -> None:
@@ -65,8 +77,7 @@ async def cmd_login(settings: Settings, args) -> int:
 async def cmd_chats(settings: Settings, args) -> int:
     from .telegram import TelegramSource
     async with TelegramSource(settings.telegram, settings.export) as src:
-        me = await src.me()
-        decisions = await plan(src, settings.chats, _roles(settings, me.id))
+        decisions = await _plan(src, settings, args)
     _print_plan(decisions)
     return 0
 
@@ -75,8 +86,7 @@ async def cmd_export(settings: Settings, args) -> int:
     from .telegram import TelegramSource
     store = RawStore(settings.raw_dir)
     async with TelegramSource(settings.telegram, settings.export) as src:
-        me = await src.me()
-        decisions = await plan(src, settings.chats, _roles(settings, me.id))
+        decisions = await _plan(src, settings, args)
         report = await export(
             src, store, decisions, settings.export, log=_say,
             full=bool(getattr(args, "full", False)), only=getattr(args, "only", None),
@@ -202,7 +212,7 @@ def build_parser() -> argparse.ArgumentParser:
     sub = p.add_subparsers(dest="command", required=True)
     lg = sub.add_parser("login", help="authorize the Telegram account interactively")
     lg.add_argument("--qr", action="store_true", help="log in by scanning a QR code in the official app (no login code needed)")
-    sub.add_parser("chats", help="list dialogs and the export decision for each")
+    c = sub.add_parser("chats", help="list dialogs and the export decision for each")
     e = sub.add_parser("export", help="export raw messages (incremental)")
     e.add_argument("--full", action="store_true", help="re-export selected chats from scratch")
     e.add_argument("--only", type=int, nargs="+", metavar="ID", help="export only these chat ids")
@@ -211,6 +221,9 @@ def build_parser() -> argparse.ArgumentParser:
     r = sub.add_parser("run", help="export, anonymize and verify")
     r.add_argument("--full", action="store_true")
     r.add_argument("--only", type=int, nargs="+", metavar="ID")
+    for cmd in (c, e, r):
+        cmd.add_argument("--refresh", action="store_true",
+                         help="ask Telegram for every member list again instead of reusing saved ones")
     return p
 
 

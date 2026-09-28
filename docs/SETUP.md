@@ -240,6 +240,13 @@ channels are not exported by default; that is expected.
 
 To export only some of the chats, use `include_ids`.
 
+With many dialogs the table takes a while: the program checks the members of every
+chat that passes the filters, with a pause between requests, and prints a line for
+each chat it asks about (`[12/310] members of supergroup 'Acme support' (-1001234567890)`).
+What it fetched is saved, so running `chats` again after editing
+`config.toml`, and the `run` that follows, reuse it for 24 hours instead of asking
+Telegram again (`--refresh` asks anew).
+
 ## 8. Export, anonymize, verify
 
 ```bash

@@ -2,13 +2,15 @@
 
 Two entry points:
 
-``plan(source, chat_filter, roles)``
+``plan(source, chat_filter, roles, cache, log)``
     Lists every dialog, applies the configured filter and returns one
     ``ChatDecision`` per dialog saying whether it will be exported and why.
     Candidates are inspected once (members + lineage): the member list feeds
     the "internal chat" rule and is kept on the decision so ``export`` does
     not fetch it twice, and a supergroup's legacy group is attached as an
-    extra peer even when it no longer appears in the dialog list.
+    extra peer even when it no longer appears in the dialog list. With an
+    ``InspectionCache`` the inspections survive the run, so ``chats``
+    followed by ``export`` asks Telegram for each member list only once.
 
 ``export(source, store, decisions, tuning, log)``
     Pulls messages newer than the store's cursor for every included chat
@@ -21,14 +23,57 @@ from __future__ import annotations
 
 import dataclasses
 from dataclasses import dataclass, field
+from datetime import datetime, timedelta, timezone
 from typing import Callable, Iterable, Optional
 
 from .config import ChatFilter, ExportTuning
 from .errors import ExportHalt
-from .model import KIND_GROUP, KIND_SUPERGROUP, RawChat, RawUser, Roles
+from .model import KIND_GROUP, KIND_SUPERGROUP, ChatDetails, RawChat, RawUser, Roles
 from .rawstore import RawStore
 
 Log = Callable[[str], None]
+
+SAVE_EVERY = 25  # member lists fetched between two saves of the inspection cache
+
+
+def _utcnow() -> datetime:
+    return datetime.now(timezone.utc)
+
+
+class InspectionCache:
+    """Member lists from earlier ``inspect`` calls, saved in the raw store.
+
+    Inspecting the candidates is the slow part of a plan: one or two paced
+    requests per chat, about an hour for a thousand dialogs. A saved result
+    is reused while it is younger than ``max_age``, and only by the account
+    that fetched it. Only what Telegram said is saved, never a decision: the
+    filter and the staff lists are applied afresh on every plan, so editing
+    ``config.toml`` never costs a new inspection. ``refresh`` ignores what
+    was saved. ``put`` saves every ``SAVE_EVERY`` results, so an
+    interrupted plan resumes where it stopped.
+    """
+
+    def __init__(self, store: RawStore, me_id: int, max_age: timedelta, refresh: bool = False,
+                 clock: Callable[[], datetime] = _utcnow):
+        self._store, self._me_id, self._clock = store, me_id, clock
+        cutoff = clock() - max_age
+        saved = {} if refresh else store.inspections(me_id)
+        self._entries = {cid: (at, d) for cid, (at, d) in saved.items() if at >= cutoff}
+        self._unsaved = 0
+
+    def get(self, chat_id: int) -> Optional[ChatDetails]:
+        entry = self._entries.get(chat_id)
+        return entry[1] if entry else None
+
+    def put(self, chat_id: int, details: ChatDetails) -> None:
+        self._entries[chat_id] = (self._clock(), details)
+        self._unsaved += 1
+        if self._unsaved >= SAVE_EVERY:
+            self.save()
+
+    def save(self) -> None:
+        self._store.put_inspections(self._me_id, self._entries)
+        self._unsaved = 0
 
 
 @dataclass
@@ -81,7 +126,8 @@ def _attach_legacy(decisions: dict[int, ChatDecision], legacy_id: int, target: C
     d.reason = f"merged into {target.chat.id}" if target.included else f"target: {target.reason}"
 
 
-async def plan(source, flt: ChatFilter, roles: Roles) -> list[ChatDecision]:
+async def plan(source, flt: ChatFilter, roles: Roles, cache: Optional[InspectionCache] = None,
+               log: Log = lambda s: None) -> list[ChatDecision]:
     chats = await source.list_chats()
     decisions: dict[int, ChatDecision] = {}
     for chat in chats:
@@ -94,26 +140,48 @@ async def plan(source, flt: ChatFilter, roles: Roles) -> list[ChatDecision]:
         if chat.kind == KIND_GROUP and chat.migrated_to in decisions:
             _attach_legacy(decisions, chat.id, decisions[chat.migrated_to], flt)
 
-    for d in list(decisions.values()):
-        if not d.included or d.merged_into is not None:
-            continue
-        details = await source.inspect(d.chat)
-        d.participants = details.users
-        d.roster_complete = details.complete
-        if details.participants_count is not None:
-            d.chat = dataclasses.replace(d.chat, participant_count=details.participants_count)
-        if d.chat.kind == KIND_SUPERGROUP and details.migrated_from_id is not None:
-            _attach_legacy(decisions, details.migrated_from_id, d, flt)
-        if flt.exclude_internal and is_internal(details.users, roles, details.complete):
-            d.included = False
-            d.reason = "internal (all members are staff)"
-            for other in decisions.values():
-                if other.merged_into == d.chat.id:
-                    other.included, other.reason = False, d.reason
-        elif d.included and not details.complete:
-            d.reason = "included (member list " + (details.error or "incomplete") + ")"
+    candidates = [d for d in decisions.values() if d.included and d.merged_into is None]
+    to_fetch = sum(1 for d in candidates if cache is None or cache.get(d.chat.id) is None)
+    if candidates:
+        log(f"Checking members of {len(candidates)} chats: {len(candidates) - to_fetch} saved by an earlier run, "
+            f"{to_fetch} to ask Telegram")
+    fetched = 0
+    try:
+        for d in list(decisions.values()):
+            if not d.included or d.merged_into is not None:
+                continue
+            details = cache.get(d.chat.id) if cache is not None else None
+            if details is None:
+                fetched += 1
+                log(f"  [{fetched}/{to_fetch}] members of {d.chat.kind} {d.chat.title!r} ({d.chat.id})")
+                details = await source.inspect(d.chat)
+                if cache is not None:
+                    cache.put(d.chat.id, details)
+            _apply_details(decisions, d, details, flt, roles)
+    finally:
+        if cache is not None and fetched:
+            cache.save()
 
     return sorted(decisions.values(), key=lambda d: (not d.included, d.chat.kind, d.chat.title.lower()))
+
+
+def _apply_details(decisions: dict[int, ChatDecision], d: ChatDecision, details: ChatDetails,
+                   flt: ChatFilter, roles: Roles) -> None:
+    """Fold one inspection into the plan: members, lineage, the internal rule."""
+    d.participants = details.users
+    d.roster_complete = details.complete
+    if details.participants_count is not None:
+        d.chat = dataclasses.replace(d.chat, participant_count=details.participants_count)
+    if d.chat.kind == KIND_SUPERGROUP and details.migrated_from_id is not None:
+        _attach_legacy(decisions, details.migrated_from_id, d, flt)
+    if flt.exclude_internal and is_internal(details.users, roles, details.complete):
+        d.included = False
+        d.reason = "internal (all members are staff)"
+        for other in decisions.values():
+            if other.merged_into == d.chat.id:
+                other.included, other.reason = False, d.reason
+    elif d.included and not details.complete:
+        d.reason = "included (member list " + (details.error or "incomplete") + ")"
 
 
 @dataclass
@@ -146,12 +214,12 @@ async def export(
     store.set_me_id(me.id)
     store.put_chats(d.chat for d in decisions)  # catalogue everything, even excluded
 
-    for d in selected:
+    for n, d in enumerate(selected, 1):
         chat = d.chat
         if full:
             store.reset_chat(chat.id)
         after = store.last_message_id(chat.id)
-        label = f"{chat.title!r} ({chat.id})" + (" [legacy part]" if d.merged_into else "")
+        label = f"[{n}/{len(selected)}] {chat.title!r} ({chat.id})" + (" [legacy part]" if d.merged_into else "")
         log(f"{label}: exporting after id {after}")
         users: dict[int, RawUser] = {u.id: u for u in d.participants}
         batch = []

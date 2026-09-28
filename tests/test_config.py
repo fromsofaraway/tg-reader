@@ -10,6 +10,7 @@ def test_defaults_without_files(tmp_path):
     assert s.telegram.api_id is None
     assert s.chats.include_types == {"group", "supergroup"}
     assert s.anon.name_mode == "first" and s.anon.url_mode == "drop"
+    assert s.export.members_cache_hours == 24
     with pytest.raises(ConfigError):
         s.telegram.require()
 
@@ -52,6 +53,7 @@ max_chars = 0
     '[chats]\nexclude_ids = ["abc"]',
     '[output]\ntimezone = "Mars/Olympus"',
     '[chats]\nexclude_title_regex = ["("]',
+    '[export]\nmembers_cache_hours = -1',
 ])
 def test_invalid_config_is_rejected(tmp_path, toml):
     (tmp_path / "config.toml").write_text(toml)

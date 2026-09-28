@@ -79,6 +79,9 @@ wait_time = 1.0              # seconds between history pages (100 messages each)
                              # Raise to 3.0 for Telethon's estimate of ~10 history requests per 30 s
 chat_wait = 3.0              # seconds before starting the next chat
 participants_wait = 2.0      # seconds between member-list / chat-info requests
+members_cache_hours = 24     # `chats` and `export` save the member lists they fetch (data/raw/inspections.json)
+                             # and reuse them this long, so `export` right after `chats` does not ask again;
+                             # --refresh fetches them anew, 0 turns saving off
 flood_sleep_threshold = 3600 # sleep through FloodWait automatically up to this many seconds
 max_flood_wait = 7200        # a longer FloodWait stops the run; re-run later to resume
 max_retries = 5              # transient network/server errors per chat before giving up

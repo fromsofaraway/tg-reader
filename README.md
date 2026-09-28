@@ -285,6 +285,9 @@ Options:
   fetched.
 * `export --only ID ...` (also `run --only`): only these chat ids (see `chats`).
   A legacy group merged into a selected supergroup follows it.
+* `chats --refresh` (also `export --refresh`, `run --refresh`): ask Telegram for every
+  member list again. By default a member list fetched in the last
+  `[export] members_cache_hours` (24) is reused (see below).
 * `--project DIR`: directory with `.env` and `config.toml` (default: the current
   directory). Relative `TG_DATA_DIR` and `TG_SESSION` paths resolve against it.
 * `--config PATH`: an explicit `config.toml` (default: `<project>/config.toml`).
@@ -337,7 +340,15 @@ include_archived = true
 exclude_internal = true                   # skip chats whose members are all staff/bots
 ```
 
-The dialog list is requested once per run.
+The dialog list is requested once per run. Deciding needs the member list of every
+chat that passes the filters: one or two paced requests per chat, about an hour for a
+thousand dialogs. `chats` and `export` save what they fetch in
+`data/raw/inspections.json` and reuse it for `[export] members_cache_hours` (24 by
+default), so `export` right after `chats` asks for none of it again, and an
+interrupted `chats` resumes where it stopped. Only Telegram's answers are saved, not
+the decisions: edits to `[chats]` and `[staff]` apply to the next run without new
+requests. The saved lists belong to the account that fetched them; `--refresh`
+fetches them anew, for example after a client joined a chat that looked internal.
 
 ## Anonymization
 
@@ -776,7 +787,7 @@ data/
   session/support.session      Telegram authorization key: treat like a password
   session/support.lock         single-process lock (harmless)
   raw/                         raw export with every real identifier: never share
-    chats.json, users.json, state.json, messages/<chat>.jsonl
+    chats.json, users.json, state.json, inspections.json, messages/<chat>.jsonl
   anon/mapping.json            U#####/C##### -> Telegram ids (secret)
   anon/anonymize_report.json   replacement counts with raw samples (private)
   anon/verify_report.json      leak matches with raw tokens (private)

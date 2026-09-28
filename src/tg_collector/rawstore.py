@@ -5,6 +5,7 @@ Layout under ``root``::
     chats.json            {marked_chat_id: RawChat}
     users.json            {user_id: RawUser}
     state.json            per-chat export cursor (last message id, count, timestamp)
+    inspections.json      member lists fetched while planning, with fetch times
     messages/<chat>.jsonl one RawMessage per line, append-only
 
 The store is the seam between the Telegram adapter (writer) and the
@@ -30,7 +31,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterable, Iterator, Optional
 
-from .model import RawChat, RawMessage, RawUser
+from .model import ChatDetails, RawChat, RawMessage, RawUser
 
 log = logging.getLogger(__name__)
 
@@ -180,6 +181,10 @@ class RawStore:
     def _state_path(self) -> Path:
         return self.root / "state.json"
 
+    @property
+    def _inspections_path(self) -> Path:
+        return self.root / "inspections.json"
+
     def _messages_path(self, chat_id: int) -> Path:
         name = f"m{-chat_id}" if chat_id < 0 else f"u{chat_id}"
         return self.root / "messages" / f"{name}.jsonl"
@@ -213,6 +218,29 @@ class RawStore:
         for user in users:
             current[user.id] = _merge_user(current.get(user.id), user)
         write_private_json(self._users_path, {str(k): v.to_json() for k, v in current.items()})
+
+    # --- member lists fetched while planning ------------------------------------
+
+    def inspections(self, me_id: int) -> dict[int, tuple[datetime, ChatDetails]]:
+        """Member lists saved for the account ``me_id``, with the time each was
+        fetched. Lists fetched by another account, or an unreadable file,
+        count as none: they are only a shortcut and can always be fetched again."""
+        try:
+            raw = _read_json(self._inspections_path, {})
+            if raw.get("me_id") != me_id:
+                return {}
+            return {int(k): (datetime.fromisoformat(v["inspected_at"]), ChatDetails.from_json(v["details"]))
+                    for k, v in raw.get("chats", {}).items()}
+        except (ValueError, KeyError, TypeError, AttributeError) as exc:
+            log.warning("%s is unreadable (%s); member lists will be fetched again", self._inspections_path.name, exc)
+            return {}
+
+    def put_inspections(self, me_id: int, entries: dict[int, tuple[datetime, ChatDetails]]) -> None:
+        """Replace the saved member lists with ``entries``."""
+        write_private_json(self._inspections_path, {
+            "me_id": me_id,
+            "chats": {str(k): {"inspected_at": at.isoformat(), "details": d.to_json()} for k, (at, d) in entries.items()},
+        })
 
     # --- messages ------------------------------------------------------------
 
